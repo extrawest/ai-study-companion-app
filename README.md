@@ -29,6 +29,7 @@ AI Study Companion is a powerful Flutter application that leverages artificial i
     -   Vector similarity search using Pinecone
     -   Multi-agent system with Langgraph
     -   Real-time processing and analysis
+    -   OCR for text extraction with @google-cloud/vision
 
 ## Technical Architecture
 
@@ -90,10 +91,9 @@ npm install
 
 3. Create a `.env` file in the server root with the following variables:
 
+Create account in Google Cloud and download the JSON file
 ```env
-OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-PINECONE_API_KEY="YOUR_PINECONE_API_KEY"
-PINECONE_INDEX_NAME="YOUR_PINECONE_INDEX_NAME"
+GOOGLE_APPLICATION_CREDENTIALS_JSON = {YOUR GOOGLE APPLICATION CREDENTIALS JSON}
 ```
 5. Start the server:
 
@@ -136,6 +136,7 @@ npx tsx server.ts
 
 -   @langchain/openai: ^0.3.14
 -   @langchain/pinecone: ^0.1.3
+-   @google-cloud/vision: 4.3.2
 -   express: ^4.21.1
 -   typescript: ^5.7.2
 -   And more (see package.json)
