@@ -4,7 +4,7 @@
         "module": "NodeNext",
         "moduleResolution": "NodeNext",
         "outDir": "./dist",
-        "rootDir": "./",
+        "rootDir": ".",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
@@ -12,6 +12,6 @@
         "allowJs": true,
         "resolveJsonModule": true
     },
-    "include": ["./**/*.ts"],
+    "include": ["**/*.ts"],
     "exclude": ["node_modules", "dist"]
 }

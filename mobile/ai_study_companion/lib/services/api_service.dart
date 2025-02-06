@@ -9,8 +9,8 @@ import '../features/chat/models/api_response.dart';
 import '../features/qiz/models/quiz_response.dart';
 import '../network/exceptions/api_exceptions.dart';
 
-const String baseUrl = 'http://localhost:3000/api';
-// const String baseUrl = 'https://ai-companion-backend-e7rhauvkg-alexs-projects-54041ff0.vercel.app/api';
+// const String baseUrl = 'http://localhost:3000/api';
+const String baseUrl = 'https://ai-companion-backend-o6zz1o1la-alexs-projects-54041ff0.vercel.app/api';
 
 class ApiService {
   Future<ApiResponse> sendMessage({

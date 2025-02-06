@@ -9,37 +9,63 @@ import { OpenAIEmbeddings } from '@langchain/openai';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { FileHandlerService } from './services/fileHandlerService';
+import { processFile } from './services/fileHandlerService.js';
 import dotenv from 'dotenv';
+import CredentialsService from './services/credentialsService.js';
+import { Runnable } from '@langchain/core/runnables';
+import { BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import { AIMessageChunk } from '@langchain/core/messages';
 
 dotenv.config();
 
-// Initialize Pinecone
-const pinecone = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY!,
-});
+// Initialize everything lazily
+let pinecone: Pinecone | null = null;
+let credentialsService: CredentialsService | null = null;
+let processingModel: Runnable<BaseLanguageModelInput, AIMessageChunk, ChatOpenAICallOptions> | null = null;
+let queryingModel: Runnable<BaseLanguageModelInput, AIMessageChunk, ChatOpenAICallOptions> | null = null;
+let processingToolNode: ToolNode | null = null;
+let queryingToolNode: ToolNode | null = null;
+let processingApp: any = null;
+let queryingApp: any = null;
 
-// Initialize Pinecone index name with type checking
-const pineconeIndexName = process.env.PINECONE_INDEX_NAME;
-if (!pineconeIndexName) {
-    throw new Error('PINECONE_INDEX_NAME environment variable is not defined');
+// Function to get or initialize credentials
+function getCredentials() {
+    if (!credentialsService) {
+        credentialsService = CredentialsService.getInstance();
+    }
+    return credentialsService;
+}
+
+// Function to get or initialize Pinecone
+function getPinecone() {
+    if (!pinecone) {
+        const credentials = getCredentials();
+        pinecone = new Pinecone({
+            apiKey: credentials.getPineconeKey()
+        });
+    }
+    return pinecone;
 }
 
 // Text splitter configuration
 const textSplitter = new RecursiveCharacterTextSplitter({
     chunkSize: 1000,
-    chunkOverlap: 200,
+    chunkOverlap: 200
 });
 
-// Initialize shared ChatOpenAI instance
-const sharedChatModel = new ChatOpenAI({
-    modelName: 'gpt-4o-mini',
-    temperature: 0,
-});
+// Initialize shared ChatOpenAI instance - make it a function
+function getChatModel(temperature = 0) {
+    const credentials = getCredentials();
+    return new ChatOpenAI({
+        modelName: 'gpt-4o-mini',
+        temperature,
+        openAIApiKey: credentials.getOpenAIKey()
+    });
+}
 
 // Create a higher temperature version for more creative responses
 const getCreativeChatModel = () => {
-    return sharedChatModel.bind({ temperature: 0.7 } as ChatOpenAICallOptions);
+    return getChatModel(0.7);
 };
 
 // Custom tools for document processing
@@ -47,24 +73,24 @@ const extractContentTool = new DynamicStructuredTool({
     name: 'extract_content',
     description: 'Extract content from a file using FileHandlerService',
     schema: z.object({
-        filePath: z.string(),
+        filePath: z.string()
     }),
     func: async ({ filePath }) => {
-        const content = await FileHandlerService.extractContent(filePath);
+        const content = await processFile(filePath);
         return content;
-    },
+    }
 });
 
 const splitTextTool = new DynamicStructuredTool({
     name: 'split_text',
     description: 'Split text content into chunks',
     schema: z.object({
-        content: z.string(),
+        content: z.string()
     }),
     func: async ({ content }) => {
         const chunks = await textSplitter.splitText(content);
         return JSON.stringify(chunks);
-    },
+    }
 });
 
 const saveToPineconeTool = new DynamicStructuredTool({
@@ -73,13 +99,15 @@ const saveToPineconeTool = new DynamicStructuredTool({
     schema: z.object({
         chunks: z.array(z.string()),
         documentId: z.string(),
-        metadata: z.record(z.any()).optional(),
+        metadata: z.record(z.any()).optional()
     }),
     func: async ({ chunks, documentId, metadata = {} }) => {
-        const index = pinecone.Index(pineconeIndexName);
-        const embeddings = new OpenAIEmbeddings();
+        const index = getPinecone().Index(getCredentials().getPineconeIndexName());
+        const embeddings = new OpenAIEmbeddings({
+            openAIApiKey: getCredentials().getOpenAIKey()
+        });
         const vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
-            pineconeIndex: index,
+            pineconeIndex: index
         });
 
         const documents = chunks.map((chunk, index) => {
@@ -88,14 +116,14 @@ const saveToPineconeTool = new DynamicStructuredTool({
                 metadata: {
                     ...metadata,
                     documentId,
-                    chunkIndex: index,
-                },
+                    chunkIndex: index
+                }
             });
         });
 
         await vectorStore.addDocuments(documents);
         return `Successfully saved ${chunks.length} chunks to Pinecone with documentId: ${documentId}`;
-    },
+    }
 });
 
 // Custom tool for document querying
@@ -104,14 +132,16 @@ const queryPineconeTool = new DynamicStructuredTool({
     description: 'Query Pinecone vector store for relevant content',
     schema: z.object({
         query: z.string(),
-        documentId: z.string(),
+        documentId: z.string()
     }),
     func: async ({ query, documentId }) => {
-        const index = pinecone.Index(pineconeIndexName);
-        const embeddings = new OpenAIEmbeddings();
+        const index = getPinecone().Index(getCredentials().getPineconeIndexName());
+        const embeddings = new OpenAIEmbeddings({
+            openAIApiKey: getCredentials().getOpenAIKey()
+        });
         const vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
             pineconeIndex: index,
-            filter: { documentId },
+            filter: { documentId }
         });
 
         const results = await retryWithExponentialBackoff(async () => {
@@ -120,16 +150,15 @@ const queryPineconeTool = new DynamicStructuredTool({
         });
 
         return JSON.stringify(results);
-    },
+    }
 });
 
 // Add new direct chat tool
 const directChatTool = new DynamicStructuredTool({
     name: 'direct_chat',
-    description:
-        'Have a direct conversation with ChatGPT without using document context',
+    description: 'Have a direct conversation with ChatGPT without using document context',
     schema: z.object({
-        query: z.string(),
+        query: z.string()
     }),
     func: async ({ query }) => {
         const chatModel = getCreativeChatModel();
@@ -141,28 +170,79 @@ Your responses should be:
 2. Easy to understand
 3. Helpful and practical
 4. Engaging but professional`),
-            new HumanMessage(query),
+            new HumanMessage(query)
         ]);
 
-        return typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content);
-    },
+        return typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+    }
 });
 
-// Update tool sets
-const processingTools = [extractContentTool, splitTextTool, saveToPineconeTool];
-const queryingTools = [queryPineconeTool, directChatTool];
+// Get or initialize the processing model
+function getProcessingModel() {
+    if (!processingModel) {
+        processingModel = getChatModel().bindTools(getProcessingTools());
+    }
+    return processingModel;
+}
 
-// Create processing model and tool node
-const processingModel = sharedChatModel.bindTools(processingTools);
+// Get or initialize the querying model
+function getQueryingModel() {
+    if (!queryingModel) {
+        queryingModel = getChatModel().bindTools(getQueryingTools());
+    }
+    return queryingModel;
+}
 
-const processingToolNode = new ToolNode(processingTools);
+// Get processing tools
+function getProcessingTools() {
+    return [extractContentTool, splitTextTool, saveToPineconeTool];
+}
 
-// Create querying model and tool node
-const queryingModel = sharedChatModel.bindTools(queryingTools);
+// Get querying tools
+function getQueryingTools() {
+    return [queryPineconeTool, directChatTool];
+}
 
-const queryingToolNode = new ToolNode(queryingTools);
+// Get or initialize the processing workflow
+function getProcessingApp() {
+    if (!processingApp) {
+        const workflow = new StateGraph(MessagesAnnotation)
+            .addNode('agent', callProcessingModel)
+            .addEdge('__start__', 'agent')
+            .addNode('tools', new ToolNode(getProcessingTools()))
+            .addEdge('tools', 'agent')
+            .addConditionalEdges('agent', shouldContinue);
+
+        processingApp = workflow.compile();
+    }
+    return processingApp;
+}
+
+// Get or initialize the querying workflow
+function getQueryingApp() {
+    if (!queryingApp) {
+        const workflow = new StateGraph(MessagesAnnotation)
+            .addNode('agent', callQueryingModel)
+            .addEdge('__start__', 'agent')
+            .addNode('tools', new ToolNode(getQueryingTools()))
+            .addEdge('tools', 'agent')
+            .addConditionalEdges('agent', shouldContinue);
+
+        queryingApp = workflow.compile();
+    }
+    return queryingApp;
+}
+
+// Update the model calling functions
+async function callProcessingModel(state: typeof MessagesAnnotation.State) {
+    const response = await getProcessingModel().invoke(state.messages);
+    return { messages: [response] };
+}
+
+async function callQueryingModel(state: typeof MessagesAnnotation.State) {
+    const response = await getQueryingModel().invoke(state.messages);
+    return { messages: [response] };
+}
 
 // Define the function that determines whether to continue or not
 function shouldContinue({ messages }: typeof MessagesAnnotation.State) {
@@ -173,57 +253,14 @@ function shouldContinue({ messages }: typeof MessagesAnnotation.State) {
     return '__end__';
 }
 
-// Define the model calling functions
-async function callProcessingModel(state: typeof MessagesAnnotation.State) {
-    const response = await processingModel.invoke(state.messages);
-    return { messages: [response] };
-}
-
-async function callQueryingModel(state: typeof MessagesAnnotation.State) {
-    const response = await queryingModel.invoke(state.messages);
-    return { messages: [response] };
-}
-
-// Create the processing workflow
-const processingWorkflow = new StateGraph(MessagesAnnotation)
-    .addNode('agent', callProcessingModel)
-    .addEdge('__start__', 'agent')
-    .addNode('tools', processingToolNode)
-    .addEdge('tools', 'agent')
-    .addConditionalEdges('agent', shouldContinue);
-
-// Create the querying workflow
-const queryingWorkflow = new StateGraph(MessagesAnnotation)
-    .addNode('agent', callQueryingModel)
-    .addEdge('__start__', 'agent')
-    .addNode('tools', queryingToolNode)
-    .addEdge('tools', 'agent')
-    .addConditionalEdges('agent', shouldContinue);
-
-// Compile the workflows
-const processingApp = processingWorkflow.compile();
-const queryingApp = queryingWorkflow.compile();
-
 // Helper function for retrying operations
-async function retryWithExponentialBackoff<T>(
-    operation: () => Promise<T>,
-    maxRetries: number = 5,
-    initialDelay: number = 2000
-): Promise<T> {
+async function retryWithExponentialBackoff<T>(operation: () => Promise<T>, maxRetries: number = 5, initialDelay: number = 1000): Promise<T> {
     for (let i = 0; i < maxRetries; i++) {
         try {
             const result = await operation();
-            if (
-                Array.isArray(result) &&
-                result.length === 0 &&
-                i < maxRetries - 1
-            ) {
+            if (Array.isArray(result) && result.length === 0 && i < maxRetries - 1) {
                 const delay = initialDelay * Math.pow(2, i);
-                console.log(
-                    `No results found, retrying in ${
-                        delay / 1000
-                    } seconds... (Attempt ${i + 1}/${maxRetries})`
-                );
+                console.log(`No results found in Pinecone yet, retrying... (Attempt ${i + 1}/${maxRetries})`);
                 await new Promise((resolve) => setTimeout(resolve, delay));
                 continue;
             }
@@ -231,72 +268,58 @@ async function retryWithExponentialBackoff<T>(
         } catch (error) {
             if (i === maxRetries - 1) throw error;
             const delay = initialDelay * Math.pow(2, i);
-            console.log(
-                `Error occurred, retrying in ${
-                    delay / 1000
-                } seconds... (Attempt ${i + 1}/${maxRetries})`
-            );
+            console.log(`Error occurred, retrying... (Attempt ${i + 1}/${maxRetries})`);
             await new Promise((resolve) => setTimeout(resolve, delay));
         }
     }
     throw new Error('Max retries reached');
 }
 
-// Main processing function
-export async function processDocument(
-    filePath: string,
-    existingDocumentId?: string
-): Promise<{ status: string; message: string; documentId: string }> {
+// Update the main processing function
+export async function processDocument(filePath: string, documentId: string): Promise<{ status: string; documentId: string }> {
     try {
-        const documentId =
-            existingDocumentId ||
-            `doc_${Math.random().toString(36).substring(7)}`;
-        console.log('Processing document:', filePath, 'with ID:', documentId);
+        console.log(`[Pinecone] Processing document: ${filePath}`);
 
-        const systemPrompt = `You are a document processing assistant. Process the document by:
-1. Extracting content from the file
-2. Splitting the content into chunks
-3. Saving the chunks to Pinecone with proper metadata
-Use the available tools in sequence to accomplish this task.`;
+        const content = await processFile(filePath);
+        const chunks = await textSplitter.splitText(content);
 
-        const result = await processingApp.invoke({
-            messages: [
-                new SystemMessage(systemPrompt),
-                new HumanMessage(
-                    `Process this document: ${filePath} with documentId: ${documentId}`
-                ),
-            ],
+        const index = getPinecone().Index(getCredentials().getPineconeIndexName());
+        const embeddings = new OpenAIEmbeddings({
+            openAIApiKey: getCredentials().getOpenAIKey()
+        });
+        const vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
+            pineconeIndex: index
         });
 
-        const lastMessage = result.messages[result.messages.length - 1];
-        const message =
-            typeof lastMessage.content === 'string'
-                ? lastMessage.content
-                : JSON.stringify(lastMessage.content);
+        // Create documents
+        const documents = chunks.map(
+            (chunk, i) =>
+                new Document({
+                    pageContent: chunk,
+                    metadata: { documentId, chunkIndex: i }
+                })
+        );
+
+        // Save to Pinecone
+        console.log(`[Pinecone] Saving ${documents.length} chunks`);
+        await vectorStore.addDocuments(documents);
 
         return {
             status: 'success',
-            message,
-            documentId,
+            documentId
         };
     } catch (error) {
-        console.error('Error processing document:', error);
+        console.error('[Pinecone] Error:', error);
         throw error;
     }
 }
 
-// Update the main querying function
-export async function queryDocument(
-    query: string,
-    documentId?: string
-): Promise<{ status: string; message: string }> {
+// Update the querying function
+export async function queryDocument(query: string, documentId?: string): Promise<{ status: string; message: string }> {
     try {
-        console.log(
-            documentId
-                ? `Querying document: ${documentId} with query: ${query}`
-                : `Direct chat query: ${query}`
-        );
+        console.log(documentId ? `Querying document: ${documentId} with query: ${query}` : `Direct chat query: ${query}`);
 
+        const app = getQueryingApp();
         const systemPrompt = documentId
             ? `You are a document querying assistant. Your task is to:
 1. Search the document for relevant content using the provided query
@@ -309,26 +332,18 @@ Use the available tools to accomplish this task.`
 3. Ensure the response is clear, informative, and directly addresses the query
 Use the direct_chat tool to provide your response.`;
 
-        const userMessage = documentId
-            ? `Find information about: "${query}" in document: ${documentId}`
-            : `Please respond to this query: "${query}"`;
+        const userMessage = documentId ? `Find information about: "${query}" in document: ${documentId}` : `Please respond to this query: "${query}"`;
 
-        const result = await queryingApp.invoke({
-            messages: [
-                new SystemMessage(systemPrompt),
-                new HumanMessage(userMessage),
-            ],
+        const result = await app.invoke({
+            messages: [new SystemMessage(systemPrompt), new HumanMessage(userMessage)]
         });
 
         const lastMessage = result.messages[result.messages.length - 1];
-        const message =
-            typeof lastMessage.content === 'string'
-                ? lastMessage.content
-                : JSON.stringify(lastMessage.content);
+        const message = typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content);
 
         return {
             status: 'success',
-            message,
+            message
         };
     } catch (error) {
         console.error('Error in query:', error);
@@ -336,17 +351,14 @@ Use the direct_chat tool to provide your response.`;
     }
 }
 
-// Update the chatWithContext function
-export async function chatWithContext(
-    query: string,
-    filePaths?: string[]
-): Promise<{ status: string; message: string }> {
+// Update the chat function
+export async function chatWithContext(query: string, filePaths?: string[]): Promise<{ status: string; message: string }> {
     try {
         // Validate input parameters
         if (!query) {
             return {
                 status: 'error',
-                message: 'Query is required',
+                message: 'Query is required'
             };
         }
 
@@ -366,17 +378,14 @@ Your responses should be:
 2. Easy to understand
 3. Helpful and practical
 4. Engaging but professional`),
-                new HumanMessage(query),
+                new HumanMessage(query)
             ]);
 
-            const message =
-                typeof response.content === 'string'
-                    ? response.content
-                    : JSON.stringify(response.content);
+            const message = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
 
             return {
                 status: 'success',
-                message,
+                message
             };
         }
 
@@ -384,7 +393,7 @@ Your responses should be:
         // Process each file and collect their documentIds
         const documentIds = await Promise.all(
             paths.map(async (filePath) => {
-                const result = await processDocument(filePath);
+                const result = await processDocument(filePath, `doc_${Math.random().toString(36).substring(7)}`);
                 return result.documentId;
             })
         );
@@ -400,17 +409,20 @@ Your responses should be:
         // Combine and return results
         return {
             status: 'success',
-            message: results.join('\n\n'),
+            message: results.join('\n\n')
         };
     } catch (error) {
         console.error('Error in chat with context:', error);
-        // Return a more user-friendly error message
         return {
             status: 'error',
-            message:
-                error instanceof Error
-                    ? error.message
-                    : 'An unexpected error occurred',
+            message: error instanceof Error ? error.message : 'An unexpected error occurred'
         };
     }
 }
+
+// At the bottom of the file, add:
+export const documentAgent = {
+    processDocument,
+    queryDocument,
+    chatWithContext
+};

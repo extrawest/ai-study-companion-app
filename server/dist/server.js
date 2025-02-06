@@ -1,31 +1,34 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = __importDefault(require("express"));
-const multer_1 = __importDefault(require("multer"));
-const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
-const documentRoutes_1 = require("./routes/documentRoutes");
-const quizRoutes_1 = require("./routes/quizRoutes");
-const app = (0, express_1.default)();
+import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { handleDocumentProcessing } from './routes/documentRoutes.js';
+import { handleQuizGeneration, handleQuizEvaluation, } from './routes/quizRoutes.js';
+import CredentialsService from './services/credentialsService.js';
+const app = express();
 const port = 3000;
+// Get the directory name of the current module
+const __dirname = process.cwd();
 // Middleware setup - only parse JSON for specific content types
 app.use((req, res, next) => {
     if (req.is('multipart/form-data')) {
         next();
     }
     else {
-        express_1.default.json()(req, res, next);
+        express.json()(req, res, next);
     }
 });
+// Use /tmp directory for Vercel
+const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp' : './uploads';
+if (process.env.NODE_ENV !== 'production' && !fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir);
+}
 // File handling setup
-const storage = multer_1.default.diskStorage({
-    destination: (_req, _file, cb) => cb(null, 'uploads/'),
-    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`)
+const storage = multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadDir),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
 });
-const upload = (0, multer_1.default)({ storage });
+const upload = multer({ storage });
 // CORS middleware
 app.use(function (req, res, next) {
     res.header('Access-Control-Allow-Origin', '*');
@@ -60,27 +63,39 @@ app.use((err, _req, res, next) => {
     if (!res.headersSent) {
         res.status(500).json({
             status: 'error',
-            message: err.message
+            message: err.message,
         });
     }
     next(err);
 });
 // Async handler wrapper
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-// Initialize directories
-['uploads', 'logs'].forEach((dir) => {
-    if (!fs_1.default.existsSync(dir)) {
-        fs_1.default.mkdirSync(dir);
-    }
-});
 // Clean uploads folder
-fs_1.default.readdirSync('uploads').forEach((file) => {
-    fs_1.default.unlinkSync(path_1.default.join('uploads', file));
+fs.readdirSync(uploadDir).forEach((file) => {
+    fs.unlinkSync(path.join(uploadDir, file));
 });
 // Routes
-app.post('/api/chat-with-context', upload.array('files', 5), asyncHandler(documentRoutes_1.handleDocumentProcessing));
-app.post('/api/quiz/generate', asyncHandler(quizRoutes_1.handleQuizGeneration));
-app.post('/api/quiz/evaluate', asyncHandler(quizRoutes_1.handleQuizEvaluation));
+app.post('/api/chat-with-context', upload.array('files', 5), asyncHandler(handleDocumentProcessing));
+app.post('/api/quiz/generate', asyncHandler(handleQuizGeneration));
+app.post('/api/quiz/evaluate', asyncHandler(handleQuizEvaluation));
+app.post('/api/set-credentials', (req, res) => {
+    const { openaiApiKey, pineconeApiKey, pineconeIndexName } = req.body;
+    if (!openaiApiKey || !pineconeApiKey || !pineconeIndexName) {
+        return res.status(400).json({ error: 'Missing required credentials' });
+    }
+    try {
+        const credentialsService = CredentialsService.getInstance();
+        credentialsService.setCredentials({
+            openaiApiKey,
+            pineconeApiKey,
+            pineconeIndexName,
+        });
+        res.json({ message: 'Credentials set successfully' });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to set credentials' });
+    }
+});
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });

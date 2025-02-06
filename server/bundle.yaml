@@ -1,0 +1,18 @@
+version: v1
+runConfig:
+  runCommand: 'node dist/index.js'
+  environmentVariables:
+    - variable: VAR
+      value: 8080
+      availability: RUNTIME
+  concurrency: 80
+  cpu: 2
+  memoryMiB: 512
+  minInstances: 0
+  maxInstances: 14
+
+metadata:
+  adapterPackageName: npm-name
+  adapterVersion: 12.0.0
+  framework: framework-name
+  frameworkVersion: 1.0.0
