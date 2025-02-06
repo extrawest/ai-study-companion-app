@@ -116,6 +116,7 @@ class WelcomeScreen extends StatelessWidget {
   }) {
     return TextField(
       onChanged: onChanged,
+      obscureText: true,
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
@@ -127,7 +128,9 @@ class WelcomeScreen extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: state.openAiKey.isNotEmpty &&
+        onPressed:
+
+        state.openAiKey.isNotEmpty &&
                 state.pineconeApiKey.isNotEmpty &&
                 state.pineconeIndexName.isNotEmpty
             ? () => context.read<CredsCubit>().submitCreds()

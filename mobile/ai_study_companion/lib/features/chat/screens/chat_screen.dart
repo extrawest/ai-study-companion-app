@@ -115,6 +115,7 @@ class _ChatScreenContentState extends State<ChatScreenContent> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Ai Study Assistant'),
+          leading: const SizedBox(),
         ),
         body: BlocBuilder<ChatCubit, ChatWidgetState>(
           builder: (context, state) {
