@@ -10,6 +10,14 @@
 
 AI Study Companion is a powerful Flutter application that leverages artificial intelligence to enhance your learning experience. The app allows users to upload various document types (PDF, DOC, TXT, JPG, PNG) and receive AI-generated summaries and interactive quizzes based on the content.
 
+## Preview
+
+https://github.com/user-attachments/assets/b24e93ab-ff42-4f56-b9f1-f463469e61de
+
+## Live Web link
+https://67a4df0dd9f4e12a8327e0d3--stellular-marigold-95229f.netlify.app 
+
+
 ## Key Features
 
 -   **Document Processing**
